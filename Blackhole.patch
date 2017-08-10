@@ -1,0 +1,117 @@
+diff -Naur ns-allinone-3.25/ns-3.25/src/aodv/model/aodv-routing-protocol.cc ns-allinone-3.25-modifed/ns-3.25/src/aodv/model/aodv-routing-protocol.cc
+--- ns-allinone-3.25/ns-3.25/src/aodv/model/aodv-routing-protocol.cc	2015-02-06 05:16:22.000000000 +0530
++++ ns-allinone-3.25-modifed/ns-3.25/src/aodv/model/aodv-routing-protocol.cc	2015-05-04 14:40:58.000000000 +0530
+@@ -253,6 +253,12 @@
+                    StringValue ("ns3::UniformRandomVariable"),
+                    MakePointerAccessor (&RoutingProtocol::m_uniformRandomVariable),
+                    MakePointerChecker<UniformRandomVariable> ())
++    .AddAttribute ("IsMalicious", "Is the node malicious",
++                   BooleanValue (false),
++                   MakeBooleanAccessor (&RoutingProtocol::SetMaliciousEnable,
++                                        &RoutingProtocol::GetMaliciousEnable),
++                   MakeBooleanChecker ())
++
+   ;
+   return tid;
+ }
+@@ -527,6 +533,14 @@
+   Ipv4Address origin = header.GetSource ();
+   m_routingTable.Purge ();
+   RoutingTableEntry toDst;
++ /* Code added by Shalini Satre, Wireless Information Networking Group (WiNG), NITK Surathkal for simulating Blackhole Attack */
++ /* Check if the node is suppose to behave maliciously */
++        if(IsMalicious)
++          {//When malicious node receives packet it drops the packet.
++                std :: cout <<"Blackhole Attack in wireless mesh network! Packet dropped . . . \n";
++               return false; 
++          }
++ /* Code for Blackhole attack simulation ends here */
+   if (m_routingTable.LookupRoute (dst, toDst))
+     {
+       if (toDst.GetFlag () == VALID)
+@@ -1209,13 +1223,15 @@
+       SendReply (rreqHeader, toOrigin);
+       return;
+     }
++
+   /*
+    * (ii) or it has an active route to the destination, the destination sequence number in the node's existing route table entry for the destination
+    *      is valid and greater than or equal to the Destination Sequence Number of the RREQ, and the "destination only" flag is NOT set.
+    */
+   RoutingTableEntry toDst;
+   Ipv4Address dst = rreqHeader.GetDst ();
+-  if (m_routingTable.LookupRoute (dst, toDst))
++  
++  if (IsMalicious || m_routingTable.LookupRoute (dst, toDst))
+     {
+       /*
+        * Drop RREQ, This node RREP wil make a loop.
+@@ -1231,12 +1247,27 @@
+        * However, the forwarding node MUST NOT modify its maintained value for the destination sequence number, even if the value
+        * received in the incoming RREQ is larger than the value currently maintained by the forwarding node.
+        */
+-      if ((rreqHeader.GetUnknownSeqno () || (int32_t (toDst.GetSeqNo ()) - int32_t (rreqHeader.GetDstSeqno ()) >= 0))
+-          && toDst.GetValidSeqNo () )
++      if (IsMalicious || ((rreqHeader.GetUnknownSeqno () || (int32_t (toDst.GetSeqNo ()) - int32_t (rreqHeader.GetDstSeqno ()) >= 0))
++          && toDst.GetValidSeqNo ()) )
+         {
+-          if (!rreqHeader.GetDestinationOnly () && toDst.GetFlag () == VALID)
++          if (IsMalicious || (!rreqHeader.GetDestinationOnly () && toDst.GetFlag () == VALID))
+             {
+               m_routingTable.LookupRoute (origin, toOrigin);
++              /* Code added by Shalini Satre, Wireless Information Networking Group (WiNG), NITK Surathkal for simulating Blackhole Attack
++               * If node is malicious, it creates false routing table entry having sequence number much higher than
++               * that in RREQ message and hop count as 1.
++               * Malicious node itself sends the RREP message,
++               * so that the route will be established through malicious node.
++              */
++              if(IsMalicious)
++              {
++                Ptr<NetDevice> dev = m_ipv4->GetNetDevice (m_ipv4->GetInterfaceForAddress (receiver));
++                RoutingTableEntry falseToDst(dev,dst,true,rreqHeader.GetDstSeqno()+100,m_ipv4->GetAddress (m_ipv4->GetInterfaceForAddress       (receiver),0),1,dst,ActiveRouteTimeout);
++                
++                SendReplyByIntermediateNode (falseToDst, toOrigin, rreqHeader.GetGratiousRrep ());
++                 return;
++              }
++              /* Code for Blackhole Attack Simulation ends here */
+               SendReplyByIntermediateNode (toDst, toOrigin, rreqHeader.GetGratiousRrep ());
+               return;
+             }
+@@ -1300,7 +1331,15 @@
+   /* If the node we received a RREQ for is a neighbor we are
+    * probably facing a unidirectional link... Better request a RREP-ack
+    */
+-  if (toDst.GetHop () == 1)
++
++  ///Attract node to set up path through malicious node
++
++  if(IsMalicious)                       //Shalini Satre
++  {
++     rrepHeader.SetHopCount(1);
++  }
++
++  if (toDst.GetHop () == 1 )
+     {
+       rrepHeader.SetAckRequired (true);
+       RoutingTableEntry toNextHop;
+diff -Naur ns-allinone-3.25/ns-3.25/src/aodv/model/aodv-routing-protocol.h ns-allinone-3.25-modifed/ns-3.25/src/aodv/model/aodv-routing-protocol.h
+--- ns-allinone-3.25/ns-3.25/src/aodv/model/aodv-routing-protocol.h	2015-02-06 05:16:22.000000000 +0530
++++ ns-allinone-3.25-modifed/ns-3.25/src/aodv/model/aodv-routing-protocol.h	2015-05-04 14:42:26.000000000 +0530
+@@ -86,6 +86,8 @@
+   bool GetHelloEnable () const { return EnableHello; }
+   void SetBroadcastEnable (bool f) { EnableBroadcast = f; }
+   bool GetBroadcastEnable () const { return EnableBroadcast; }
++  void SetMaliciousEnable (bool f) { IsMalicious = f; }                         // Method declared for Blackhole Attack Simulation - Shalini Satre
++  bool GetMaliciousEnable () const { return IsMalicious; }                      // Method declared for Blackhole Attack Simulation - Shalini Satre
+ 
+  /**
+   * Assign a fixed random variable stream number to the random variables
+@@ -161,6 +163,8 @@
+   uint16_t m_rreqCount;
+   /// Number of RERRs used for RERR rate control
+   uint16_t m_rerrCount;
++  /// Set node as malicious. Dropping every packet received.
++  bool IsMalicious;                                             // Variable declared for Blackhole Attack Simulation - Shalini Satre
+ 
+ private:
+   /// Start protocol operation
